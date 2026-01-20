@@ -11,6 +11,7 @@ from telegram.ext import (
     filters,
 )
 from openai import OpenAI
+from openai import RateLimitError
 
 # ========================
 # ENV VARIABLES
@@ -42,7 +43,6 @@ logging.basicConfig(
 USER_NAMES = {
     "bhded": "Андрей Ильич",
     "laguzers": "Палъюрич",
-    "pupsnah": "Мелкая",
     "fekolinakk": "Любимая жена",
 }
 
@@ -58,7 +58,9 @@ def get_user_name(update: Update) -> str:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = get_user_name(update)
     await update.message.reply_text(
-        f"{name}, пришли фото еды — я скажу, что это и сколько там калорий 🍽️"
+        f"{name}, пришли фото еды.\n"
+        f"Можешь добавить подпись, например:\n"
+        f"«это вареники с картошкой» 🍽️"
     )
 
 # ========================
@@ -67,11 +69,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = get_user_name(update)
 
-    # Фото как обычное фото
+    # Получаем подпись пользователя (если есть)
+    user_caption = update.message.caption or ""
+
+    # Получаем файл
     if update.message.photo:
         file = await update.message.photo[-1].get_file()
-
-    # Фото как файл
     elif (
         update.message.document
         and update.message.document.mime_type
@@ -85,51 +88,72 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     image_base64 = base64.b64encode(image_bytes).decode()
 
     prompt = f"""
-Ты — ассистент по питанию.
-Обращайся к пользователю: {name}.
+Ты — эксперт по питанию.
 
-Определи блюдо на фото и оцени калорийность.
+ВАЖНО:
+- Если пользователь явно указал блюдо текстом — СЧИТАЙ ЭТО ФАКТОМ.
+- Не спорь с пользователем.
+- Фото используй для оценки веса и порции.
 
-Формат ответа:
-Название:
-Описание:
-Примерная калорийность (ккал):
-Точность оценки: низкая / средняя / высокая
+Подпись пользователя (если есть):
+\"\"\"{user_caption}\"\"\"
 
-Если не уверен — скажи прямо.
+Задача:
+1. Определи блюдо (или используй подпись).
+2. Оцени примерный вес порции по фото.
+3. Укажи калорийность на 100 г.
+4. Рассчитай ОБЩУЮ калорийность блюда.
+5. Укажи точность оценки: низкая / средняя / высокая.
+
+Формат ответа СТРОГО такой:
+Блюдо:
+Вес порции (г):
+Калорийность на 100 г (ккал):
+Итого калорий (ккал):
+Точность оценки:
+Комментарий:
 """
 
-    response = await asyncio.to_thread(
-        client.chat.completions.create,
-        model="gpt-4o-mini",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{image_base64}"
+    try:
+        response = await asyncio.to_thread(
+            client.chat.completions.create,
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{image_base64}"
+                            },
                         },
-                    },
-                ],
-            }
-        ],
-        max_tokens=300,
-    )
+                    ],
+                }
+            ],
+            max_tokens=400,
+        )
 
-    answer = response.choices[0].message.content
+        answer = response.choices[0].message.content
 
-    await update.message.reply_text(
-        f"{name}, вот что у тебя на тарелке:\n\n{answer}"
-    )
+        await update.message.reply_text(
+            f"{name}, вот оценка твоего блюда:\n\n{answer}"
+        )
+
+    except RateLimitError:
+        await update.message.reply_text(
+            "⏳ Я сейчас перегружен. Подожди немного и попробуй снова."
+        )
 
 # ========================
 # TEXT HANDLER
 # ========================
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Пришли фото еды 📸")
+    await update.message.reply_text(
+        "Пришли фото еды 📸\n"
+        "Можешь добавить подпись, чтобы уточнить блюдо."
+    )
 
 # ========================
 # MAIN
@@ -139,7 +163,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
 
-    # ВАЖНО: фото ПЕРЕД текстом
+    # Фото ОБЯЗАТЕЛЬНО выше текста
     app.add_handler(
         MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_photo)
     )
