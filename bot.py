@@ -20,12 +20,11 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 if not TELEGRAM_BOT_TOKEN:
     raise RuntimeError("TELEGRAM_BOT_TOKEN not set")
-
 if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY not set")
 
 # ========================
-# OpenAI client
+# OpenAI client (SYNC)
 # ========================
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -38,7 +37,7 @@ logging.basicConfig(
 )
 
 # ========================
-# User names
+# User name mapping
 # ========================
 USER_NAMES = {
     "bhded": "Андрей Ильич",
@@ -63,24 +62,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ========================
-# TEXT handler
-# ========================
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Пришли фото еды 📸"
-    )
-
-# ========================
-# PHOTO handler (MAIN)
+# PHOTO HANDLER (ВАЖНО: ПЕРВЫЙ)
 # ========================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("PHOTO HANDLER CALLED")
+
     name = get_user_name(update)
 
-    # Берём фото максимального размера
-    photo = update.message.photo[-1]
-    file = await photo.get_file()
-    image_bytes = await file.download_as_bytearray()
+    # Фото как photo
+    if update.message.photo:
+        photo = update.message.photo[-1]
+        file = await photo.get_file()
 
+    # Фото как document (отправлено файлом)
+    elif update.message.document and update.message.document.mime_type.startswith("image/"):
+        file = await update.message.document.get_file()
+    else:
+        return
+
+    image_bytes = await file.download_as_bytearray()
     image_base64 = base64.b64encode(image_bytes).decode()
 
     prompt = f"""
@@ -98,7 +98,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Если не уверен — скажи прямо.
 """
 
-    # ❗ OpenAI в отдельном потоке
     response = await asyncio.to_thread(
         client.chat.completions.create,
         model="gpt-4o-mini",
@@ -126,18 +125,40 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ========================
+# TEXT HANDLER (СТРОГО ПОСЛЕ ФОТО)
+# ========================
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Пришли фото еды 📸"
+    )
+
+# ========================
 # MAIN
 # ========================
 def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
+    # ❗ ПОРЯДОК КРИТИЧЕН
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+    # Фото и фото-файлы — ПЕРВЫМИ
+    app.add_handler(
+        MessageHandler(
+            filters.PHOTO | filters.Document.IMAGE,
+            handle_photo
+        )
+    )
+
+    # Текст — ПОСЛЕДНИМ
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handle_text
+        )
+    )
 
     print("Bot started")
     app.run_polling()
 
-if __name__ == "__main__":
+if name == "__main__":
     main()
-
