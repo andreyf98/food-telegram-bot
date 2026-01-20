@@ -3,6 +3,7 @@ import json
 import logging
 import asyncio
 import base64
+import random
 from datetime import date
 from telegram import Update
 from telegram.ext import (
@@ -25,7 +26,6 @@ if not TELEGRAM_BOT_TOKEN or not OPENAI_API_KEY:
     raise RuntimeError("Env variables not set")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
-
 DATA_FILE = "data.json"
 
 # ========================
@@ -34,7 +34,7 @@ DATA_FILE = "data.json"
 logging.basicConfig(level=logging.INFO)
 
 # ========================
-# USERS
+# USER NAMES
 # ========================
 USER_NAMES = {
     "bhded": "Андрей Ильич",
@@ -49,7 +49,63 @@ def get_user_name(update: Update) -> str:
     return "друг"
 
 # ========================
-# DATA HELPERS
+# POSITIVE PHRASES
+# ========================
+POSITIVE_PHRASES = [
+    "Вкуснотища!",
+    "Пальчики оближешь.",
+    "Выглядит очень аппетитно.",
+    "Зачётная тарелка.",
+    "Вот это подход к еде.",
+    "Отличный выбор.",
+    "Смотрится с душой.",
+    "Еда как надо.",
+    "Уважение повару.",
+    "Прямо захотелось попробовать.",
+    "Классика, которая не подводит.",
+    "Выглядит по-домашнему.",
+    "Надёжный вариант.",
+    "Сытно и по делу.",
+    "Хорошая порция.",
+    "Аппетитно без лишнего.",
+    "Это мы одобряем.",
+    "Визуально — 🔥",
+    "Умеешь выбирать.",
+    "Еда, которая радует.",
+    "Похоже на удачный приём пищи.",
+    "Без лишних слов — вкусно.",
+    "Выглядит убедительно.",
+    "Приятно глазу.",
+    "Честная еда.",
+    "С таким не ошибёшься.",
+    "Видно, что с настроением.",
+    "Еда, которая делает день лучше.",
+    "Хороший момент для такого блюда.",
+    "Серьёзный кандидат на «вкусно».",
+    "Это точно не зря.",
+    "Выглядит очень достойно.",
+    "Простая радость.",
+    "Порция внушает доверие.",
+    "Выглядит правильно.",
+    "Тут комментарии излишни.",
+    "Приятный выбор.",
+    "С таким можно жить.",
+    "Аппетит говорит сам за себя.",
+    "Выглядит уютно.",
+    "Сытный вариант.",
+    "Вкусно выглядит, спору нет.",
+    "Хорошая еда без лишнего пафоса.",
+    "Похоже на удачный приём пищи.",
+    "Тут всё на месте.",
+    "Визуально очень ок.",
+    "Приятно видеть такую тарелку.",
+    "Похоже, было вкусно.",
+    "Это явно доставляет удовольствие.",
+    "Хороший выбор для этого момента.",
+]
+
+# ========================
+# DATA STORAGE
 # ========================
 def load_data():
     if not os.path.exists(DATA_FILE):
@@ -81,8 +137,8 @@ def add_entry(user_id, dish, calories):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Пришли фото еды 🍽️\n"
-        "Я запишу калории.\n\n"
-        "Команда /today — сколько съел сегодня."
+        "Можно добавить подпись.\n\n"
+        "/today — калории за сегодня"
     )
 
 async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -97,18 +153,16 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     total = sum(m["calories"] for m in meals)
-
     lines = [f"• {m['dish']} — {m['calories']} ккал" for m in meals]
-    text = "Сегодня ты съел:\n\n" + "\n".join(lines)
-    text += f"\n\nИтого: {total} ккал"
 
-    await update.message.reply_text(text)
+    await update.message.reply_text(
+        "Сегодня:\n\n" + "\n".join(lines) + f"\n\nИтого: {total} ккал"
+    )
 
 # ========================
-# PHOTO
+# PHOTO HANDLER
 # ========================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    name = get_user_name(update)
     caption = update.message.caption or ""
 
     if update.message.photo:
@@ -125,16 +179,18 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Ты — эксперт по питанию.
 
 Если пользователь указал блюдо текстом — считай это фактом.
+Фото используй для оценки веса и порции.
 
-Подпись:
+Подпись пользователя:
 \"\"\"{caption}\"\"\"
 
-Определи блюдо, оцени вес порции и посчитай
-ИТОГОВУЮ калорийность блюда.
-
 Ответ дай СТРОГО в формате:
+
 Блюдо:
-Итого калорий (ккал):
+Вес порции (г):
+Калорийность блюда (ккал):
+Точность оценки:
+Комментарий:
 """
 
     try:
@@ -155,28 +211,33 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ],
                 }
             ],
-            max_tokens=200,
+            max_tokens=300,
         )
 
-        answer = response.choices[0].message.content
+        answer = response.choices[0].message.content.strip()
+        lines = [l for l in answer.splitlines() if l.strip()]
 
-        lines = answer.splitlines()
         dish = lines[0].replace("Блюдо:", "").strip()
         calories = int(
-            lines[1]
-            .replace("Итого калорий (ккал):", "")
+            lines[2]
+            .replace("Калорийность блюда (ккал):", "")
             .strip()
             .split()[0]
         )
 
+        # если комментарий пустой — подставляем фразу
+        if len(lines) < 5 or not lines[4].replace("Комментарий:", "").strip():
+            phrase = random.choice(POSITIVE_PHRASES)
+            lines.append(f"Комментарий: {phrase}")
+
+        final_answer = "\n".join(lines)
+
         add_entry(update.effective_user.id, dish, calories)
 
-        await update.message.reply_text(
-            f"{name}, записал:\n{dish} — {calories} ккал"
-        )
+        await update.message.reply_text(final_answer)
 
     except RateLimitError:
-        await update.message.reply_text("⏳ Лимит запросов. Попробуй позже.")
+        await update.message.reply_text("⏳ Я сейчас перегружен. Попробуй чуть позже.")
 
 # ========================
 # MAIN
@@ -186,12 +247,16 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("today", today))
+
     app.add_handler(
         MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_photo)
     )
+
     app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND,
-                       lambda u, c: u.message.reply_text("Пришли фото еды 📸"))
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            lambda u, c: u.message.reply_text("Пришли фото еды 📸")
+        )
     )
 
     print("Bot started")
