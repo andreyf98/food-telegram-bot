@@ -42,14 +42,8 @@ USER_NAMES = {
     "fekolinakk": "Любимая жена",
 }
 
-def get_user_name(update: Update) -> str:
-    user = update.effective_user
-    if user and user.username:
-        return USER_NAMES.get(user.username.lower(), user.first_name)
-    return "друг"
-
 # ========================
-# POSITIVE PHRASES
+# PHRASES
 # ========================
 POSITIVE_PHRASES = [
     "Вкуснотища!",
@@ -58,54 +52,34 @@ POSITIVE_PHRASES = [
     "Зачётная тарелка.",
     "Вот это подход к еде.",
     "Отличный выбор.",
-    "Смотрится с душой.",
-    "Еда как надо.",
-    "Уважение повару.",
-    "Прямо захотелось попробовать.",
-    "Классика, которая не подводит.",
-    "Выглядит по-домашнему.",
-    "Надёжный вариант.",
     "Сытно и по делу.",
-    "Хорошая порция.",
-    "Аппетитно без лишнего.",
-    "Это мы одобряем.",
-    "Визуально — 🔥",
-    "Умеешь выбирать.",
-    "Еда, которая радует.",
-    "Похоже на удачный приём пищи.",
-    "Без лишних слов — вкусно.",
-    "Выглядит убедительно.",
+    "Еда как надо.",
     "Приятно глазу.",
-    "Честная еда.",
-    "С таким не ошибёшься.",
-    "Видно, что с настроением.",
-    "Еда, которая делает день лучше.",
-    "Хороший момент для такого блюда.",
-    "Серьёзный кандидат на «вкусно».",
-    "Это точно не зря.",
-    "Выглядит очень достойно.",
-    "Простая радость.",
-    "Порция внушает доверие.",
-    "Выглядит правильно.",
-    "Тут комментарии излишни.",
-    "Приятный выбор.",
-    "С таким можно жить.",
-    "Аппетит говорит сам за себя.",
-    "Выглядит уютно.",
-    "Сытный вариант.",
-    "Вкусно выглядит, спору нет.",
-    "Хорошая еда без лишнего пафоса.",
-    "Похоже на удачный приём пищи.",
-    "Тут всё на месте.",
-    "Визуально очень ок.",
-    "Приятно видеть такую тарелку.",
-    "Похоже, было вкусно.",
-    "Это явно доставляет удовольствие.",
-    "Хороший выбор для этого момента.",
+    "Еда, которая радует.",
+]
+
+SPECIAL_PHRASES = [
+    "Кайфани как следует, роднулька ❤️",
+    "Сегодня можно, роднулька 😌",
+    "Живём один раз — кайфуй ❤️",
+    "Вот ради этого и старались.",
+    "Да и правильно, иногда надо.",
+    "Чистый кайф, без оправданий.",
+    "Такое надо уважать.",
+    "Красиво живёшь, роднулька 😎",
+    "Такое не каждый день — и слава богу.",
+    "Вот за это мы и любим еду.",
+    "Чистое гастрономическое счастье.",
+]
+
+SPECIAL_KEYWORDS = [
+    "пиво", "пивко", "ipa", "lager", "stout", "эль",
+    "алкоголь", "бургер", "пицца", "фри", "картофель фри",
+    "торт", "десерт"
 ]
 
 # ========================
-# DATA STORAGE
+# DATA
 # ========================
 def load_data():
     if not os.path.exists(DATA_FILE):
@@ -120,16 +94,28 @@ def save_data(data):
 def add_entry(user_id, dish, calories):
     data = load_data()
     today = str(date.today())
-
     data.setdefault(str(user_id), {})
     data[str(user_id)].setdefault(today, [])
-
     data[str(user_id)][today].append({
         "dish": dish,
         "calories": calories
     })
-
     save_data(data)
+
+def reset_today(user_id):
+    data = load_data()
+    today = str(date.today())
+    if str(user_id) in data and today in data[str(user_id)]:
+        del data[str(user_id)][today]
+        save_data(data)
+        return True
+    return False
+
+def is_special_case(dish: str, calories: int) -> bool:
+    if calories >= 800:
+        return True
+    dish_lower = dish.lower()
+    return any(word in dish_lower for word in SPECIAL_KEYWORDS)
 
 # ========================
 # COMMANDS
@@ -137,8 +123,10 @@ def add_entry(user_id, dish, calories):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Пришли фото еды 🍽️\n"
-        "Можно добавить подпись.\n\n"
-        "/today — калории за сегодня"
+        "Можешь добавить подпись, чтобы уточнить блюдо.\n\n"
+        "Команды:\n"
+        "• /today — калории за сегодня\n"
+        "• /reset — сбросить сегодняшний счётчик"
     )
 
 async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -147,7 +135,6 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     today_key = str(date.today())
 
     meals = data.get(str(user_id), {}).get(today_key, [])
-
     if not meals:
         await update.message.reply_text("Сегодня пока ничего не записано.")
         return
@@ -159,8 +146,14 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Сегодня:\n\n" + "\n".join(lines) + f"\n\nИтого: {total} ккал"
     )
 
+async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if reset_today(update.effective_user.id):
+        await update.message.reply_text("Готово. Сегодняшний счётчик сброшен.")
+    else:
+        await update.message.reply_text("Сегодня пока нечего сбрасывать.")
+
 # ========================
-# PHOTO HANDLER
+# PHOTO
 # ========================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caption = update.message.caption or ""
@@ -225,16 +218,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             .split()[0]
         )
 
-        # если комментарий пустой — подставляем фразу
-        if len(lines) < 5 or not lines[4].replace("Комментарий:", "").strip():
-            phrase = random.choice(POSITIVE_PHRASES)
-            lines.append(f"Комментарий: {phrase}")
-
-        final_answer = "\n".join(lines)
-
         add_entry(update.effective_user.id, dish, calories)
 
-        await update.message.reply_text(final_answer)
+        if is_special_case(dish, calories):
+            encouragement = random.choice(SPECIAL_PHRASES)
+        else:
+            encouragement = random.choice(POSITIVE_PHRASES)
+
+        await update.message.reply_text(answer + "\n\n" + encouragement)
 
     except RateLimitError:
         await update.message.reply_text("⏳ Я сейчас перегружен. Попробуй чуть позже.")
@@ -247,6 +238,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("today", today))
+    app.add_handler(CommandHandler("reset", reset))
 
     app.add_handler(
         MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_photo)
