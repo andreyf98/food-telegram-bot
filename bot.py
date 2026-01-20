@@ -24,7 +24,7 @@ if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY not set")
 
 # ========================
-# OpenAI client (SYNC)
+# OpenAI client
 # ========================
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -62,20 +62,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ========================
-# PHOTO HANDLER (ВАЖНО: ПЕРВЫЙ)
+# PHOTO HANDLER
 # ========================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("PHOTO HANDLER CALLED")
-
     name = get_user_name(update)
 
-    # Фото как photo
+    # Фото как обычное фото
     if update.message.photo:
-        photo = update.message.photo[-1]
-        file = await photo.get_file()
+        file = await update.message.photo[-1].get_file()
 
-    # Фото как document (отправлено файлом)
-    elif update.message.document and update.message.document.mime_type.startswith("image/"):
+    # Фото как файл
+    elif (
+        update.message.document
+        and update.message.document.mime_type
+        and update.message.document.mime_type.startswith("image/")
+    ):
         file = await update.message.document.get_file()
     else:
         return
@@ -125,12 +126,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ========================
-# TEXT HANDLER (СТРОГО ПОСЛЕ ФОТО)
+# TEXT HANDLER
 # ========================
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Пришли фото еды 📸"
-    )
+    await update.message.reply_text("Пришли фото еды 📸")
 
 # ========================
 # MAIN
@@ -138,27 +137,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # ❗ ПОРЯДОК КРИТИЧЕН
     app.add_handler(CommandHandler("start", start))
 
-    # Фото и фото-файлы — ПЕРВЫМИ
+    # ВАЖНО: фото ПЕРЕД текстом
     app.add_handler(
-        MessageHandler(
-            filters.PHOTO | filters.Document.IMAGE,
-            handle_photo
-        )
+        MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_photo)
     )
 
-    # Текст — ПОСЛЕДНИМ
     app.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            handle_text
-        )
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
     )
 
     print("Bot started")
     app.run_polling()
 
-if name == "__main__":
+if __name__ == "__main__":
     main()
