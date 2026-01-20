@@ -43,6 +43,7 @@ logging.basicConfig(
 USER_NAMES = {
     "bhded": "Андрей Ильич",
     "laguzers": "Палъюрич",
+    "pupsnah": "Мелкая",
     "fekolinakk": "Любимая жена",
 }
 
@@ -139,3 +140,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
