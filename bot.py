@@ -34,15 +34,6 @@ DATA_FILE = "data.json"
 logging.basicConfig(level=logging.INFO)
 
 # ========================
-# USER NAMES
-# ========================
-USER_NAMES = {
-    "bhded": "Андрей Ильич",
-    "laguzers": "Палъюрич",
-    "fekolinakk": "Любимая жена",
-}
-
-# ========================
 # PHRASES
 # ========================
 POSITIVE_PHRASES = [
@@ -91,31 +82,22 @@ def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-def add_entry(user_id, dish, calories):
+def add_entry(user_id, title, calories):
     data = load_data()
     today = str(date.today())
     data.setdefault(str(user_id), {})
     data[str(user_id)].setdefault(today, [])
     data[str(user_id)][today].append({
-        "dish": dish,
+        "dish": title,
         "calories": calories
     })
     save_data(data)
 
-def reset_today(user_id):
-    data = load_data()
-    today = str(date.today())
-    if str(user_id) in data and today in data[str(user_id)]:
-        del data[str(user_id)][today]
-        save_data(data)
-        return True
-    return False
-
-def is_special_case(dish: str, calories: int) -> bool:
+def is_special_case(text: str, calories: int) -> bool:
     if calories >= 800:
         return True
-    dish_lower = dish.lower()
-    return any(word in dish_lower for word in SPECIAL_KEYWORDS)
+    t = text.lower()
+    return any(k in t for k in SPECIAL_KEYWORDS)
 
 # ========================
 # COMMANDS
@@ -123,18 +105,18 @@ def is_special_case(dish: str, calories: int) -> bool:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Пришли фото еды 🍽️\n"
-        "Можешь добавить подпись, чтобы уточнить блюдо.\n\n"
+        "Можно добавить подпись.\n\n"
         "Команды:\n"
         "• /today — калории за сегодня\n"
         "• /reset — сбросить сегодняшний счётчик"
     )
 
 async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
     data = load_data()
+    user_id = str(update.effective_user.id)
     today_key = str(date.today())
+    meals = data.get(user_id, {}).get(today_key, [])
 
-    meals = data.get(str(user_id), {}).get(today_key, [])
     if not meals:
         await update.message.reply_text("Сегодня пока ничего не записано.")
         return
@@ -147,7 +129,13 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if reset_today(update.effective_user.id):
+    data = load_data()
+    user_id = str(update.effective_user.id)
+    today_key = str(date.today())
+
+    if user_id in data and today_key in data[user_id]:
+        del data[user_id][today_key]
+        save_data(data)
         await update.message.reply_text("Готово. Сегодняшний счётчик сброшен.")
     else:
         await update.message.reply_text("Сегодня пока нечего сбрасывать.")
@@ -171,17 +159,29 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = f"""
 Ты — эксперт по питанию.
 
-Если пользователь указал блюдо текстом — считай это фактом.
-Фото используй для оценки веса и порции.
+Если на фото ОДНО блюдо — опиши его.
+Если на фото НЕСКОЛЬКО блюд или напитков — ОБЯЗАТЕЛЬНО раздели их.
+
+Если пользователь указал блюда текстом — считай это фактом.
 
 Подпись пользователя:
 \"\"\"{caption}\"\"\"
 
-Ответ дай СТРОГО в формате:
+Формат ответа:
 
+ЕСЛИ ОДНО БЛЮДО:
 Блюдо:
 Вес порции (г):
 Калорийность блюда (ккал):
+Точность оценки:
+Комментарий:
+
+ЕСЛИ НЕСКОЛЬКО БЛЮД:
+Блюда:
+• <название> — <примерный вес/объём> — <ккал>
+• <название> — <примерный вес/объём> — <ккал>
+
+Итого за приём пищи (ккал):
 Точность оценки:
 Комментарий:
 """
@@ -204,26 +204,26 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ],
                 }
             ],
-            max_tokens=300,
+            max_tokens=400,
         )
 
         answer = response.choices[0].message.content.strip()
-        lines = [l for l in answer.splitlines() if l.strip()]
 
-        dish = lines[0].replace("Блюдо:", "").strip()
-        calories = int(
-            lines[2]
-            .replace("Калорийность блюда (ккал):", "")
-            .strip()
-            .split()[0]
+        # определяем итоговые калории
+        total_calories = 0
+        for line in answer.splitlines():
+            if "ккал" in line:
+                digits = "".join(c for c in line if c.isdigit())
+                if digits:
+                    total_calories += int(digits)
+
+        add_entry(update.effective_user.id, "Приём пищи", total_calories)
+
+        encouragement = (
+            random.choice(SPECIAL_PHRASES)
+            if is_special_case(answer, total_calories)
+            else random.choice(POSITIVE_PHRASES)
         )
-
-        add_entry(update.effective_user.id, dish, calories)
-
-        if is_special_case(dish, calories):
-            encouragement = random.choice(SPECIAL_PHRASES)
-        else:
-            encouragement = random.choice(POSITIVE_PHRASES)
 
         await update.message.reply_text(answer + "\n\n" + encouragement)
 
@@ -245,10 +245,8 @@ def main():
     )
 
     app.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            lambda u, c: u.message.reply_text("Пришли фото еды 📸")
-        )
+        MessageHandler(filters.TEXT & ~filters.COMMAND,
+                       lambda u, c: u.message.reply_text("Пришли фото еды 📸"))
     )
 
     print("Bot started")
