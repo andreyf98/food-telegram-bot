@@ -1,6 +1,7 @@
 import os
 import logging
 import asyncio
+import base64
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -24,7 +25,7 @@ if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY not set")
 
 # ========================
-# OpenAI client (SYNC)
+# OpenAI client
 # ========================
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -37,7 +38,7 @@ logging.basicConfig(
 )
 
 # ========================
-# User name mapping
+# User names
 # ========================
 USER_NAMES = {
     "bhded": "Андрей Ильич",
@@ -52,41 +53,86 @@ def get_user_name(update: Update) -> str:
     return "друг"
 
 # ========================
-# Handlers
+# /start
 # ========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = get_user_name(update)
-    await update.message.reply_text(f"{name}, бот работает. Напиши сообщение.")
+    await update.message.reply_text(
+        f"{name}, пришли фото еды — я скажу, что это и сколько там калорий 🍽️"
+    )
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+# ========================
+# TEXT handler
+# ========================
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Пришли фото еды 📸"
+    )
+
+# ========================
+# PHOTO handler (MAIN)
+# ========================
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = get_user_name(update)
 
-    prompt = f"Пользователь ({name}) пишет: {text}"
+    # Берём фото максимального размера
+    photo = update.message.photo[-1]
+    file = await photo.get_file()
+    image_bytes = await file.download_as_bytearray()
 
-    # ❗ ВАЖНО: OpenAI вызов в отдельном потоке
+    image_base64 = base64.b64encode(image_bytes).decode()
+
+    prompt = f"""
+Ты — ассистент по питанию.
+Обращайся к пользователю: {name}.
+
+Определи блюдо на фото и оцени калорийность.
+
+Формат ответа:
+Название:
+Описание:
+Примерная калорийность (ккал):
+Точность оценки: низкая / средняя / высокая
+
+Если не уверен — скажи прямо.
+"""
+
+    # ❗ OpenAI в отдельном потоке
     response = await asyncio.to_thread(
         client.chat.completions.create,
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "Ты дружелюбный помощник."},
-            {"role": "user", "content": prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{image_base64}"
+                        },
+                    },
+                ],
+            }
         ],
+        max_tokens=300,
     )
 
     answer = response.choices[0].message.content
-    await update.message.reply_text(answer)
+
+    await update.message.reply_text(
+        f"{name}, вот что у тебя на тарелке:\n\n{answer}"
+    )
 
 # ========================
-# Main
+# MAIN
 # ========================
 def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
-    )
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     print("Bot started")
     app.run_polling()
