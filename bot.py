@@ -86,7 +86,7 @@ def is_stopped(user_id):
     data = load_data()
     return data.get("stopped", {}).get(str(user_id), False)
 
-def set_stopped(user_id, value: bool):
+def set_stopped(user_id, value):
     data = load_data()
     data.setdefault("stopped", {})
     data["stopped"][str(user_id)] = value
@@ -100,29 +100,19 @@ def add_meal(user_id, meal):
     data[str(user_id)][today].append(meal)
     save_data(data)
 
-def get_last_meal(user_id):
-    data = load_data()
-    today = str(date.today())
-    meals = data.get(str(user_id), {}).get(today, [])
-    return meals[-1] if meals else None
-
-def update_last_meal(user_id, meal):
-    data = load_data()
-    today = str(date.today())
-    data[str(user_id)][today][-1] = meal
-    save_data(data)
-
 # ========================
 # LOGIC
 # ========================
-def is_special(text: str, calories: int) -> bool:
+def is_special(text, calories):
     if calories >= 700:
         return True
-    t = text.lower()
-    return any(k in t for k in ALCOHOL_KEYWORDS)
+    text = text.lower()
+    return any(word in text for word in ALCOHOL_KEYWORDS)
 
 def choose_comment(text, calories):
-    return random.choice(SPECIAL_COMMENTS if is_special(text, calories) else NORMAL_COMMENTS)
+    if is_special(text, calories):
+        return random.choice(SPECIAL_COMMENTS)
+    return random.choice(NORMAL_COMMENTS)
 
 def extract_calories(text):
     total = 0
@@ -141,7 +131,7 @@ async def analyze(prompt, image_base64=None):
     if image_base64:
         content.append({
             "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}
+            "image_url": {"url": "data:image/jpeg;base64," + image_base64}
         })
 
     response = await asyncio.to_thread(
@@ -162,14 +152,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Команды:\n"
         "/today — калории за сегодня\n"
         "/week — статистика за 7 дней\n"
-        "/fix — исправить последний приём пищи\n"
         "/reset — сбросить день\n"
         "/stop — временно отключить бота"
     )
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_stopped(update.effective_user.id, True)
-    await update.message.reply_text("Бот остановлен. Напиши /start, чтобы включить снова.")
+    await update.message.reply_text(
+        "Бот остановлен. Напиши /start, чтобы включить снова."
+    )
 
 # ========================
 # HANDLERS
@@ -182,12 +173,72 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     image_bytes = await file.download_as_bytearray()
     image_base64 = base64.b64encode(image_bytes).decode()
 
-    prompt = """
-Определи блюда на фото, их вес и калории.
+    prompt = (
+        "Определи блюда на фото, их вес и калории.\n"
+        "Формат:\n"
+        "Блюда:\n"
+        "• название — вес — ккал\n\n"
+        "Итого: ккал"
+    )
 
-Формат:
-Блюда:
-• название — вес — ккал
+    try:
+        answer = await analyze(prompt, image_base64)
+        calories = extract_calories(answer)
+        comment = choose_comment(answer, calories)
 
-Итого: ккал
-"
+        add_meal(update.effective_user.id, {
+            "title": "Приём пищи",
+            "calories": calories
+        })
+
+        await update.message.reply_text(answer + "\n\n" + comment)
+
+    except RateLimitError:
+        await update.message.reply_text("⏳ Я сейчас перегружен. Попробуй позже.")
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if is_stopped(update.effective_user.id):
+        return
+
+    text = update.message.text
+
+    prompt = (
+        "Пользователь съел: " + text + "\n\n"
+        "Если количество не указано — возьми среднюю порцию.\n"
+        "Формат:\n"
+        "Блюда:\n"
+        "• название — вес — ккал\n\n"
+        "Итого: ккал"
+    )
+
+    try:
+        answer = await analyze(prompt)
+        calories = extract_calories(answer)
+        comment = choose_comment(answer, calories)
+
+        add_meal(update.effective_user.id, {
+            "title": text,
+            "calories": calories
+        })
+
+        await update.message.reply_text(answer + "\n\n" + comment)
+
+    except RateLimitError:
+        await update.message.reply_text("⏳ Я сейчас перегружен. Попробуй позже.")
+
+# ========================
+# MAIN
+# ========================
+def main():
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("stop", stop))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+    print("Bot started")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
