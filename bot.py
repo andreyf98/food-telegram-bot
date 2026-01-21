@@ -4,7 +4,7 @@ import logging
 import asyncio
 import base64
 import random
-from datetime import date, datetime
+from datetime import date
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -31,7 +31,7 @@ DATA_FILE = "data.json"
 logging.basicConfig(level=logging.INFO)
 
 # ========================
-# PHRASES
+# COMMENTS
 # ========================
 NORMAL_MEAL_PHRASES = [
     "Хороший приём пищи.",
@@ -49,60 +49,25 @@ NORMAL_MEAL_PHRASES = [
     "Спокойная еда.",
     "Приятный вариант.",
     "Такое обычно заходит.",
-    "Видно, что с настроением.",
     "Простая и понятная еда.",
-    "Выглядит привычно.",
     "Ничего лишнего.",
     "Еда как еда — и это хорошо.",
-    "Аппетитно выглядит.",
-    "Хороший выбор на сейчас.",
-    "С таким не прогадаешь.",
-    "Выглядит аккуратно.",
-    "Вполне удачный вариант.",
     "Сытно, но без перебора.",
-    "Спокойный приём пищи.",
-    "Всё выглядит логично.",
-    "Неплохая тарелка.",
     "Хорошо вписывается в день.",
 ]
 
 SPECIAL_MEAL_PHRASES = [
-    "Кайфани как следует, роднулька ❤️😌",
-    "Сегодня можно, роднулька 😌🍻",
-    "Живём один раз — кайфуй ❤️🔥",
-    "Вот ради этого и старались 😎",
-    "Да и правильно, иногда надо 🤝",
-    "Чистый кайф, без оправданий 🔥",
-    "Такое надо уважать 👌",
+    "Кайфани как следует, роднулька ❤️",
+    "Сегодня можно, роднулька 😌",
+    "Живём один раз — кайфуй ❤️",
+    "Вот ради этого и старались.",
+    "Да и правильно, иногда надо.",
+    "Чистый кайф, без оправданий.",
+    "Такое надо уважать.",
     "Красиво живёшь, роднулька 😎",
-    "Такое не каждый день — и слава богу",
-    "Вот за это мы и любим еду",
-    "Чистое гастрономическое счастье",
-]
-
-MORNING_MEAL_PHRASES = [
-    "Отличное начало дня.",
-    "Вот так и надо начинать утро.",
-    "Завтрак чемпионов.",
-    "Утро удалось.",
-    "С таким завтраком день пойдёт.",
-    "Доброе утро начинается здесь.",
-    "Правильный старт.",
-    "Утро стало добрее.",
-    "Хороший заряд на день.",
-]
-
-EVENING_MEAL_PHRASES = [
-    "Отличный финал дня.",
-    "Вечер можно считать удавшимся.",
-    "Самое время расслабиться.",
-    "Хороший ужин — половина счастья.",
-    "После такого ужина день отпускает.",
-    "Вечерняя классика.",
-    "Ужин как надо.",
-    "Хороший способ закрыть день.",
-    "Вечер стал уютнее.",
-    "После такого можно спокойно отдыхать.",
+    "Такое не каждый день — и слава богу.",
+    "Вот за это мы и любим еду.",
+    "Чистое гастрономическое счастье.",
 ]
 
 SPECIAL_KEYWORDS = [
@@ -124,15 +89,12 @@ def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-def add_entry(user_id, title, calories):
+def add_entry(user_id, calories):
     data = load_data()
     today = str(date.today())
     data.setdefault(str(user_id), {})
     data[str(user_id)].setdefault(today, [])
-    data[str(user_id)][today].append({
-        "dish": title,
-        "calories": calories
-    })
+    data[str(user_id)][today].append(calories)
     save_data(data)
 
 def is_special_case(text: str, calories: int) -> bool:
@@ -140,14 +102,6 @@ def is_special_case(text: str, calories: int) -> bool:
         return True
     t = text.lower()
     return any(k in t for k in SPECIAL_KEYWORDS)
-
-def get_time_phrase():
-    hour = datetime.now().hour
-    if hour < 11:
-        return random.choice(MORNING_MEAL_PHRASES)
-    if hour >= 18:
-        return random.choice(EVENING_MEAL_PHRASES)
-    return None
 
 # ========================
 # COMMANDS
@@ -165,18 +119,14 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     user_id = str(update.effective_user.id)
     today_key = str(date.today())
-    meals = data.get(user_id, {}).get(today_key, [])
 
-    if not meals:
+    calories = data.get(user_id, {}).get(today_key, [])
+    if not calories:
         await update.message.reply_text("Сегодня пока ничего не записано.")
         return
 
-    total = sum(m["calories"] for m in meals)
-    lines = [f"• {m['dish']} — {m['calories']} ккал" for m in meals]
-
-    await update.message.reply_text(
-        "Сегодня:\n\n" + "\n".join(lines) + f"\n\nИтого: {total} ккал"
-    )
+    total = sum(calories)
+    await update.message.reply_text(f"Сегодня всего: {total} ккал")
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
@@ -209,13 +159,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = f"""
 Ты — эксперт по питанию.
 
-Если на фото одно блюдо — опиши его.
-Если несколько блюд — раздели и посчитай каждое.
+Если на фото несколько блюд — раздели их и посчитай каждое.
+В конце обязательно напиши итоговую калорийность приёма пищи.
 
 Подпись пользователя:
 \"\"\"{caption}\"\"\"
 
 Формат:
+
 Блюда:
 • название — вес/объём — ккал
 
@@ -254,19 +205,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if digits:
                     total_calories += int(digits)
 
-        add_entry(update.effective_user.id, "Приём пищи", total_calories)
+        add_entry(update.effective_user.id, total_calories)
 
-        phrases = []
         if is_special_case(answer, total_calories):
-            phrases.append(random.choice(SPECIAL_MEAL_PHRASES))
+            comment = random.choice(SPECIAL_MEAL_PHRASES)
         else:
-            phrases.append(random.choice(NORMAL_MEAL_PHRASES))
+            comment = random.choice(NORMAL_MEAL_PHRASES)
 
-        time_phrase = get_time_phrase()
-        if time_phrase:
-            phrases.append(time_phrase)
-
-        await update.message.reply_text(answer + "\n\n" + "\n".join(phrases))
+        await update.message.reply_text(answer + "\n\n" + comment)
 
     except RateLimitError:
         await update.message.reply_text("⏳ Я сейчас перегружен. Попробуй чуть позже.")
