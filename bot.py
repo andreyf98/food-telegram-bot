@@ -1,7 +1,6 @@
 import os
 import logging
-import random
-import json
+import re
 from datetime import datetime, timedelta
 from typing import Dict, List
 
@@ -14,8 +13,7 @@ from telegram.ext import (
     filters,
 )
 
-from openai import OpenAI, RateLimitError
-
+from openai import OpenAI
 
 # ======================
 # ENV
@@ -44,30 +42,28 @@ SPECIAL_COMMENTS = [
     "Живём один раз — кайфуй ❤️ 🎉",
     "Вот ради этого и старались 🎉",
     "Да и правильно, иногда надо 🎉",
-    "Чистый кайф, без оправданий 🎉",
-    "Вот за это мы и любим еду 🎉",
-    "Чистое гастрономическое счастье 🎉",
-    "Такое надо уважать 🎉",
 ]
 
 NORMAL_COMMENTS = [
     "Хороший приём пищи",
     "Выглядит сбалансированно",
-    "Нормальный, спокойный вариант",
-    "Всё на месте",
-    "Хорошая еда без лишнего",
-    "По-домашнему",
-    "Сытно, но без перебора",
+    "Нормальный вариант",
+    "Всё ок",
     "Еда как еда — и это хорошо",
 ]
 
-ALCOHOL_WORDS = ["пиво", "алкоголь", "вино", "сидр", "шампанское"]
-SWEET_WORDS = ["торт", "пирож", "шоколад", "конфет", "десерт"]
-
+ALCOHOL_WORDS = ["пиво", "алкоголь", "вино", "сидр"]
+SWEET_WORDS = ["торт", "шоколад", "конфет", "десерт"]
 
 # ======================
 # HELPERS
 # ======================
+def extract_calories(text: str) -> int:
+    numbers = re.findall(r"\d{2,5}", text)
+    nums = [int(n) for n in numbers if 10 <= int(n) <= 5000]
+    return max(nums) if nums else 0
+
+
 def is_special(total_kcal: int, text: str) -> bool:
     t = text.lower()
     if total_kcal >= 1000:
@@ -80,24 +76,24 @@ def is_special(total_kcal: int, text: str) -> bool:
 
 
 def choose_comment(total_kcal: int, text: str) -> str:
-    return random.choice(
-        SPECIAL_COMMENTS if is_special(total_kcal, text) else NORMAL_COMMENTS
-    )
+    if is_special(total_kcal, text):
+        return random.choice(SPECIAL_COMMENTS)
+    return random.choice(NORMAL_COMMENTS)
 
 
-def save_meal(user_id: int, total_kcal: int):
+def save_meal(user_id: int, kcal: int):
     MEALS.setdefault(user_id, []).append({
         "time": datetime.now(),
-        "kcal": total_kcal,
+        "kcal": kcal,
     })
 
 
-def meals_today(user_id: int) -> List[dict]:
+def meals_today(user_id: int):
     today = datetime.now().date()
     return [m for m in MEALS.get(user_id, []) if m["time"].date() == today]
 
 
-def meals_week(user_id: int) -> List[dict]:
+def meals_week(user_id: int):
     week_ago = datetime.now() - timedelta(days=7)
     return [m for m in MEALS.get(user_id, []) if m["time"] >= week_ago]
 
@@ -105,34 +101,16 @@ def meals_week(user_id: int) -> List[dict]:
 # ======================
 # OPENAI
 # ======================
-def analyze_food(prompt: str) -> dict:
-    """
-    Возвращает СТРОГО JSON.
-    """
+def ask_openai(prompt: str) -> str:
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Ты анализируешь еду.\n"
-                    "Верни СТРОГО JSON без текста.\n"
-                    "Формат:\n"
-                    "{\n"
-                    "  \"items\": [\n"
-                    "    {\"name\": \"...\", \"weight_g\": 123, \"kcal\": 456}\n"
-                    "  ],\n"
-                    "  \"total_kcal\": 789\n"
-                    "}"
-                ),
-            },
+            {"role": "system", "content": "Определи блюдо и калорийность."},
             {"role": "user", "content": prompt},
         ],
-        temperature=0.2,
+        temperature=0.4,
     )
-
-    content = response.choices[0].message.content
-    return json.loads(content)
+    return response.choices[0].message.content
 
 
 # ======================
@@ -142,18 +120,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Я считаю калории по фото и тексту.\n\n"
         "Команды:\n"
-        "/today — калории за сегодня\n"
+        "/today — за сегодня\n"
         "/week — за 7 дней\n"
         "/delete — удалить последний приём\n"
-        "/fix новый текст — исправить последний приём\n"
-        "/reset — сбросить день\n"
-        "/stop — остановить бота"
+        "/reset — сбросить день"
     )
-
-
-async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Останавливаюсь 👋")
-    await context.application.stop()
 
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -165,33 +136,9 @@ async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     meals = MEALS.get(update.effective_user.id, [])
     if meals:
         meals.pop()
-        await update.message.reply_text("Последний приём пищи удалён.")
+        await update.message.reply_text("Последний приём удалён.")
     else:
-        await update.message.reply_text("Удалять нечего.")
-
-
-async def fix(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    meals = MEALS.get(user_id, [])
-
-    if not meals:
-        await update.message.reply_text("Нечего исправлять.")
-        return
-
-    new_text = update.message.text.replace("/fix", "").strip()
-    if not new_text:
-        await update.message.reply_text("Напиши новое описание после /fix.")
-        return
-
-    meals.pop()
-    result = analyze_food(new_text)
-    save_meal(user_id, result["total_kcal"])
-
-    comment = choose_comment(result["total_kcal"], new_text)
-
-    await update.message.reply_text(
-        f"Итого: {result['total_kcal']} ккал\n\n{comment}"
-    )
+        await update.message.reply_text("Нечего удалять.")
 
 
 async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -209,53 +156,30 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ======================
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    try:
-        result = analyze_food(text)
-    except RateLimitError:
-        await update.message.reply_text("Лимит API, попробуй позже.")
-        return
-    except Exception:
-        await update.message.reply_text("Не смог разобрать еду.")
-        return
 
-    save_meal(update.effective_user.id, result["total_kcal"])
-    comment = choose_comment(result["total_kcal"], text)
+    answer = ask_openai(text)
+    kcal = extract_calories(answer)
 
-    lines = []
-    for i in result["items"]:
-        lines.append(f"{i['name']} — {i['weight_g']} г — {i['kcal']} ккал")
-    lines.append(f"\nИтого: {result['total_kcal']} ккал")
-    lines.append(comment)
+    save_meal(update.effective_user.id, kcal)
+    comment = choose_comment(kcal, text)
 
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text(
+        f"{answer}\n\nИтого: {kcal} ккал\n{comment}"
+    )
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo = update.message.photo[-1]
-    file = await photo.get_file()
-    caption = update.message.caption or ""
+    caption = update.message.caption or "Еда на фото"
 
-    prompt = f"Фото еды. Комментарий пользователя: {caption}"
+    answer = ask_openai(f"На фото еда. {caption}")
+    kcal = extract_calories(answer)
 
-    try:
-        result = analyze_food(prompt)
-    except RateLimitError:
-        await update.message.reply_text("Лимит API, попробуй позже.")
-        return
-    except Exception:
-        await update.message.reply_text("Не смог разобрать фото.")
-        return
+    save_meal(update.effective_user.id, kcal)
+    comment = choose_comment(kcal, caption)
 
-    save_meal(update.effective_user.id, result["total_kcal"])
-    comment = choose_comment(result["total_kcal"], caption)
-
-    lines = []
-    for i in result["items"]:
-        lines.append(f"{i['name']} — {i['weight_g']} г — {i['kcal']} ккал")
-    lines.append(f"\nИтого: {result['total_kcal']} ккал")
-    lines.append(comment)
-
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text(
+        f"{answer}\n\nИтого: {kcal} ккал\n{comment}"
+    )
 
 
 # ======================
@@ -264,7 +188,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # ВАЖНО: СНАЧАЛА ФОТО
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
@@ -273,8 +196,6 @@ def main():
     app.add_handler(CommandHandler("week", week))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("delete", delete))
-    app.add_handler(CommandHandler("fix", fix))
-    app.add_handler(CommandHandler("stop", stop))
 
     app.run_polling()
 
