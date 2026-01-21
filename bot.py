@@ -129,20 +129,22 @@ def reset_today(user_id):
     return False
 
 # ========================
-# LOGIC
+# LOGIC (FIXED)
 # ========================
 def is_special(calories: int, text: str) -> bool:
     text = text.lower()
 
+    # строго: только очень калорийное
     if calories > 1000:
         return True
 
-    alcohol_words = {"пиво", "алкоголь", "ipa", "lager", "stout", "эль"}
-    if any(w in text for w in alcohol_words):
-        return True
+    # явно вредная / кайфовая еда
+    tasty_words = {
+        "пицца", "бургер", "фастфуд", "шаурма",
+        "пиво", "алкоголь", "чипсы"
+    }
 
-    sweet_words = {"торт", "пирожное", "десерт", "шоколад", "конфеты"}
-    if any(w in text for w in sweet_words) and calories >= 400:
+    if any(w in text for w in tasty_words):
         return True
 
     return False
@@ -153,13 +155,14 @@ def choose_comment(calories, text):
     )
 
 def extract_calories(text):
-    total = 0
+    """
+    Берём ТОЛЬКО строку 'Итого'
+    """
     for line in text.splitlines():
-        if "ккал" in line:
+        if line.lower().startswith("итого"):
             digits = "".join(c for c in line if c.isdigit())
-            if digits:
-                total += int(digits)
-    return total
+            return int(digits) if digits else 0
+    return 0
 
 # ========================
 # GPT
@@ -181,7 +184,7 @@ async def analyze(prompt, image_base64=None):
     return response.choices[0].message.content.strip()
 
 # ========================
-# COMMANDS
+# COMMANDS (НЕ ТРОГАЛ)
 # ========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_stopped(update.effective_user.id, False)
@@ -245,7 +248,7 @@ async def fix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ========================
-# HANDLERS
+# HANDLERS (НЕ ТРОГАЛ)
 # ========================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_stopped(update.effective_user.id):
