@@ -153,11 +153,19 @@ def choose_comment(calories, text):
     )
 
 def extract_calories(text):
+    # 1️⃣ Пытаемся найти строку "Итого"
     for line in text.splitlines():
         if line.lower().startswith("итого"):
             digits = "".join(c for c in line if c.isdigit())
-            return int(digits) if digits else 0
-    return 0
+            if digits:
+                return int(digits)
+
+    # 2️⃣ Фолбэк: берём последнее разумное число в тексте
+    numbers = [int(n) for n in "".join(
+        c if c.isdigit() else " " for c in text
+    ).split() if 10 <= int(n) <= 5000]
+
+    return numbers[-1] if numbers else 0
 
 # ========================
 # GPT
@@ -179,7 +187,7 @@ async def analyze(prompt, image_base64=None):
     return response.choices[0].message.content.strip()
 
 # ========================
-# COMMANDS
+# COMMANDS (НЕ ТРОГАЛ)
 # ========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_stopped(update.effective_user.id, False)
@@ -243,7 +251,7 @@ async def fix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ========================
-# HANDLERS
+# HANDLERS (НЕ ТРОГАЛ)
 # ========================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_stopped(update.effective_user.id):
