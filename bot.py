@@ -13,8 +13,7 @@ from telegram.ext import (
     CommandHandler,
     filters,
 )
-from openai import OpenAI
-from openai import RateLimitError
+from openai import OpenAI, RateLimitError
 
 # ========================
 # ENV
@@ -67,7 +66,11 @@ NORMAL_COMMENTS = [
     "Хорошо вписывается в день.",
 ]
 
-ALCOHOL_KEYWORDS = ["пиво", "пивко", "ipa", "lager", "stout", "эль", "алкоголь"]
+SPECIAL_KEYWORDS = [
+    "бургер", "пицца", "фастфуд", "картофель фри",
+    "торт", "десерт", "алкоголь", "пиво",
+    "ipa", "lager", "stout", "эль"
+]
 
 # ========================
 # DATA
@@ -83,8 +86,7 @@ def save_data(data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 def is_stopped(user_id):
-    data = load_data()
-    return data.get("stopped", {}).get(str(user_id), False)
+    return load_data().get("stopped", {}).get(str(user_id), False)
 
 def set_stopped(user_id, value):
     data = load_data()
@@ -95,24 +97,56 @@ def set_stopped(user_id, value):
 def add_meal(user_id, meal):
     data = load_data()
     today = str(date.today())
-    data.setdefault(str(user_id), {})
-    data[str(user_id)].setdefault(today, [])
-    data[str(user_id)][today].append(meal)
+    uid = str(user_id)
+    data.setdefault(uid, {})
+    data[uid].setdefault(today, [])
+    data[uid][today].append(meal)
     save_data(data)
+
+def get_last_meal(user_id):
+    data = load_data()
+    today = str(date.today())
+    return data.get(str(user_id), {}).get(today, [])[-1]
+
+def replace_last_meal(user_id, meal):
+    data = load_data()
+    today = str(date.today())
+    data[str(user_id)][today][-1] = meal
+    save_data(data)
+
+def delete_last_meal(user_id):
+    data = load_data()
+    today = str(date.today())
+    meals = data.get(str(user_id), {}).get(today, [])
+    if not meals:
+        return False
+    meals.pop()
+    save_data(data)
+    return True
+
+def reset_today(user_id):
+    data = load_data()
+    today = str(date.today())
+    uid = str(user_id)
+    if uid in data and today in data[uid]:
+        del data[uid][today]
+        save_data(data)
+        return True
+    return False
 
 # ========================
 # LOGIC
 # ========================
-def is_special(text, calories):
-    if calories >= 700:
+def is_special(calories, text):
+    if calories > 1000:
         return True
     text = text.lower()
-    return any(word in text for word in ALCOHOL_KEYWORDS)
+    return any(word in text for word in SPECIAL_KEYWORDS)
 
-def choose_comment(text, calories):
-    if is_special(text, calories):
-        return random.choice(SPECIAL_COMMENTS)
-    return random.choice(NORMAL_COMMENTS)
+def choose_comment(calories, text):
+    return random.choice(
+        SPECIAL_COMMENTS if is_special(calories, text) else NORMAL_COMMENTS
+    )
 
 def extract_calories(text):
     total = 0
@@ -138,7 +172,7 @@ async def analyze(prompt, image_base64=None):
         client.chat.completions.create,
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": content}],
-        max_tokens=500,
+        max_tokens=400,
     )
     return response.choices[0].message.content.strip()
 
@@ -152,14 +186,58 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Команды:\n"
         "/today — калории за сегодня\n"
         "/week — статистика за 7 дней\n"
-        "/reset — сбросить день\n"
+        "/delete — удалить последний приём пищи\n"
+        "/fix — исправить последний приём пищи\n"
+        "/reset — сбросить сегодняшний день\n"
         "/stop — временно отключить бота"
     )
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_stopped(update.effective_user.id, True)
+    await update.message.reply_text("Бот остановлен. Напиши /start, чтобы включить снова.")
+
+async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    data = load_data()
+    today = str(date.today())
+    meals = data.get(str(update.effective_user.id), {}).get(today, [])
     await update.message.reply_text(
-        "Бот остановлен. Напиши /start, чтобы включить снова."
+        f"Сегодня: {sum(m['calories'] for m in meals)} ккал"
+        if meals else "Сегодня пока ничего не записано."
+    )
+
+async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    data = load_data()
+    uid = str(update.effective_user.id)
+    total = 0
+    lines = []
+
+    for i in range(6, -1, -1):
+        d = date.today() - timedelta(days=i)
+        cals = sum(m["calories"] for m in data.get(uid, {}).get(str(d), []))
+        total += cals
+        lines.append(f"{d.strftime('%a')}: {cals} ккал")
+
+    await update.message.reply_text(
+        "Последние 7 дней:\n\n" + "\n".join(lines) + f"\n\nИтого: {total} ккал"
+    )
+
+async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if delete_last_meal(update.effective_user.id):
+        await update.message.reply_text("Последний приём пищи удалён.")
+    else:
+        await update.message.reply_text("Удалять нечего.")
+
+async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if reset_today(update.effective_user.id):
+        await update.message.reply_text("Сегодняшний день сброшен.")
+    else:
+        await update.message.reply_text("Сегодня пока нечего сбрасывать.")
+
+async def fix(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["fixing"] = True
+    await update.message.reply_text(
+        "Опиши, что нужно исправить.\n"
+        "Например: добавить помидор, сосисок было 2."
     )
 
 # ========================
@@ -170,31 +248,26 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     file = await update.message.photo[-1].get_file()
-    image_bytes = await file.download_as_bytearray()
-    image_base64 = base64.b64encode(image_bytes).decode()
+    image = base64.b64encode(await file.download_as_bytearray()).decode()
 
     prompt = (
-        "Определи блюда на фото, их вес и калории.\n"
+        "Определи блюда на фото и их калорийность.\n"
         "Формат:\n"
         "Блюда:\n"
         "• название — вес — ккал\n\n"
         "Итого: ккал"
     )
 
-    try:
-        answer = await analyze(prompt, image_base64)
-        calories = extract_calories(answer)
-        comment = choose_comment(answer, calories)
+    answer = await analyze(prompt, image)
+    calories = extract_calories(answer)
+    comment = choose_comment(calories, answer)
 
-        add_meal(update.effective_user.id, {
-            "title": "Приём пищи",
-            "calories": calories
-        })
+    add_meal(update.effective_user.id, {
+        "calories": calories,
+        "raw": answer
+    })
 
-        await update.message.reply_text(answer + "\n\n" + comment)
-
-    except RateLimitError:
-        await update.message.reply_text("⏳ Я сейчас перегружен. Попробуй позже.")
+    await update.message.reply_text(answer + "\n\n" + comment)
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_stopped(update.effective_user.id):
@@ -202,29 +275,46 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text
 
+    if context.user_data.get("fixing"):
+        context.user_data["fixing"] = False
+        last = get_last_meal(update.effective_user.id)
+
+        prompt = (
+            "Исходное описание:\n" + last["raw"] +
+            "\n\nИсправь согласно инструкции:\n" + text
+        )
+
+        answer = await analyze(prompt)
+        calories = extract_calories(answer)
+        comment = choose_comment(calories, answer)
+
+        replace_last_meal(update.effective_user.id, {
+            "calories": calories,
+            "raw": answer
+        })
+
+        await update.message.reply_text(answer + "\n\n" + comment)
+        return
+
     prompt = (
-        "Пользователь съел: " + text + "\n\n"
-        "Если количество не указано — возьми среднюю порцию.\n"
+        "Пользователь съел: " + text +
+        "\nЕсли количество не указано — возьми среднюю порцию.\n"
         "Формат:\n"
         "Блюда:\n"
         "• название — вес — ккал\n\n"
         "Итого: ккал"
     )
 
-    try:
-        answer = await analyze(prompt)
-        calories = extract_calories(answer)
-        comment = choose_comment(answer, calories)
+    answer = await analyze(prompt)
+    calories = extract_calories(answer)
+    comment = choose_comment(calories, answer)
 
-        add_meal(update.effective_user.id, {
-            "title": text,
-            "calories": calories
-        })
+    add_meal(update.effective_user.id, {
+        "calories": calories,
+        "raw": answer
+    })
 
-        await update.message.reply_text(answer + "\n\n" + comment)
-
-    except RateLimitError:
-        await update.message.reply_text("⏳ Я сейчас перегружен. Попробуй позже.")
+    await update.message.reply_text(answer + "\n\n" + comment)
 
 # ========================
 # MAIN
@@ -234,6 +324,12 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stop", stop))
+    app.add_handler(CommandHandler("today", today))
+    app.add_handler(CommandHandler("week", week))
+    app.add_handler(CommandHandler("delete", delete))
+    app.add_handler(CommandHandler("reset", reset))
+    app.add_handler(CommandHandler("fix", fix))
+
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
