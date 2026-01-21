@@ -129,16 +129,14 @@ def reset_today(user_id):
     return False
 
 # ========================
-# LOGIC (FIXED)
+# LOGIC
 # ========================
 def is_special(calories: int, text: str) -> bool:
     text = text.lower()
 
-    # строго: только очень калорийное
     if calories > 1000:
         return True
 
-    # явно вредная / кайфовая еда
     tasty_words = {
         "пицца", "бургер", "фастфуд", "шаурма",
         "пиво", "алкоголь", "чипсы"
@@ -155,9 +153,6 @@ def choose_comment(calories, text):
     )
 
 def extract_calories(text):
-    """
-    Берём ТОЛЬКО строку 'Итого'
-    """
     for line in text.splitlines():
         if line.lower().startswith("итого"):
             digits = "".join(c for c in line if c.isdigit())
@@ -184,7 +179,7 @@ async def analyze(prompt, image_base64=None):
     return response.choices[0].message.content.strip()
 
 # ========================
-# COMMANDS (НЕ ТРОГАЛ)
+# COMMANDS
 # ========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_stopped(update.effective_user.id, False)
@@ -248,17 +243,21 @@ async def fix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ========================
-# HANDLERS (НЕ ТРОГАЛ)
+# HANDLERS
 # ========================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_stopped(update.effective_user.id):
         return
+
+    caption = update.message.caption or ""
 
     file = await update.message.photo[-1].get_file()
     image = base64.b64encode(await file.download_as_bytearray()).decode()
 
     prompt = (
         "Определи блюда на фото и их калорийность.\n"
+        "Учитывай комментарий пользователя, если он есть.\n\n"
+        f"Комментарий пользователя: {caption}\n\n"
         "Формат:\n"
         "Блюда:\n"
         "• название — вес — ккал\n\n"
