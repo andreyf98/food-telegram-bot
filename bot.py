@@ -67,9 +67,7 @@ NORMAL_COMMENTS = [
     "Хорошо вписывается в день.",
 ]
 
-ALCOHOL_KEYWORDS = [
-    "пиво", "пивко", "ipa", "lager", "stout", "эль", "алкоголь"
-]
+ALCOHOL_KEYWORDS = ["пиво", "пивко", "ipa", "lager", "stout", "эль", "алкоголь"]
 
 # ========================
 # DATA
@@ -84,14 +82,14 @@ def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-def get_user_state(user_id):
+def is_stopped(user_id):
     data = load_data()
     return data.get("stopped", {}).get(str(user_id), False)
 
-def set_user_state(user_id, stopped: bool):
+def set_stopped(user_id, value: bool):
     data = load_data()
     data.setdefault("stopped", {})
-    data["stopped"][str(user_id)] = stopped
+    data["stopped"][str(user_id)] = value
     save_data(data)
 
 def add_meal(user_id, meal):
@@ -114,16 +112,6 @@ def update_last_meal(user_id, meal):
     data[str(user_id)][today][-1] = meal
     save_data(data)
 
-def delete_last_meal(user_id):
-    data = load_data()
-    today = str(date.today())
-    meals = data.get(str(user_id), {}).get(today, [])
-    if not meals:
-        return False
-    meals.pop()
-    save_data(data)
-    return True
-
 # ========================
 # LOGIC
 # ========================
@@ -134,9 +122,16 @@ def is_special(text: str, calories: int) -> bool:
     return any(k in t for k in ALCOHOL_KEYWORDS)
 
 def choose_comment(text, calories):
-    if is_special(text, calories):
-        return random.choice(SPECIAL_COMMENTS)
-    return random.choice(NORMAL_COMMENTS)
+    return random.choice(SPECIAL_COMMENTS if is_special(text, calories) else NORMAL_COMMENTS)
+
+def extract_calories(text):
+    total = 0
+    for line in text.splitlines():
+        if "ккал" in line:
+            digits = "".join(c for c in line if c.isdigit())
+            if digits:
+                total += int(digits)
+    return total
 
 # ========================
 # GPT
@@ -157,91 +152,42 @@ async def analyze(prompt, image_base64=None):
     )
     return response.choices[0].message.content.strip()
 
-def extract_calories(text):
-    total = 0
-    for line in text.splitlines():
-        if "ккал" in line:
-            digits = "".join(c for c in line if c.isdigit())
-            if digits:
-                total += int(digits)
-    return total
-
 # ========================
 # COMMANDS
 # ========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    set_user_state(update.effective_user.id, False)
+    set_stopped(update.effective_user.id, False)
     await update.message.reply_text(
         "Бот активен.\n\n"
         "Команды:\n"
         "/today — калории за сегодня\n"
         "/week — статистика за 7 дней\n"
-        "/delete — удалить последний приём пищи\n"
         "/fix — исправить последний приём пищи\n"
-        "/reset — сбросить весь день\n"
+        "/reset — сбросить день\n"
         "/stop — временно отключить бота"
     )
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    set_user_state(update.effective_user.id, True)
+    set_stopped(update.effective_user.id, True)
     await update.message.reply_text("Бот остановлен. Напиши /start, чтобы включить снова.")
-
-# ========================
-# GUARD
-# ========================
-def is_stopped(update: Update):
-    return get_user_state(update.effective_user.id)
 
 # ========================
 # HANDLERS
 # ========================
-async def guarded(handler):
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if is_stopped(update):
-            return
-        await handler(update, context)
-    return wrapper
-
-# ---- commands ----
-async def today(update, context):
-    data = load_data()
-    today_key = str(date.today())
-    meals = data.get(str(update.effective_user.id), {}).get(today_key, [])
-    if not meals:
-        await update.message.reply_text("Сегодня пока ничего не записано.")
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if is_stopped(update.effective_user.id):
         return
-    total = sum(m["calories"] for m in meals)
-    await update.message.reply_text(f"Сегодня: {total} ккал")
 
-async def week(update, context):
-    data = load_data()
-    uid = str(update.effective_user.id)
-    total = 0
-    for i in range(7):
-        day = str(date.today() - timedelta(days=i))
-        total += sum(m["calories"] for m in data.get(uid, {}).get(day, []))
-    await update.message.reply_text(f"За 7 дней: {total} ккал")
+    file = await update.message.photo[-1].get_file()
+    image_bytes = await file.download_as_bytearray()
+    image_base64 = base64.b64encode(image_bytes).decode()
 
-# ---- reuse existing handlers ----
-handle_photo = guarded(handle_photo)
-handle_text = guarded(handle_text)
+    prompt = """
+Определи блюда на фото, их вес и калории.
 
-# ========================
-# MAIN
-# ========================
-def main():
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+Формат:
+Блюда:
+• название — вес — ккал
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("stop", stop))
-    app.add_handler(CommandHandler("today", today))
-    app.add_handler(CommandHandler("week", week))
-
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-    print("Bot started")
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+Итого: ккал
+"
