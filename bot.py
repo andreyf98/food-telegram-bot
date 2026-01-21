@@ -13,8 +13,7 @@ from telegram.ext import (
     filters,
 )
 
-from openai import OpenAI
-from openai.error import RateLimitError
+from openai import OpenAI, RateLimitError
 
 
 # ========================
@@ -70,7 +69,6 @@ NORMAL_COMMENTS = [
 ALCOHOL_KEYWORDS = ["пиво", "вино", "алкоголь", "шампанское", "сидр"]
 SWEET_KEYWORDS = ["торт", "пирож", "конфет", "шоколад", "десерт"]
 
-
 # ========================
 # UTILS
 # ========================
@@ -113,6 +111,10 @@ def ask_openai(prompt: str) -> int:
         digits = "".join(c for c in text if c.isdigit())
         return int(digits) if digits else 0
     except RateLimitError:
+        logging.warning("OpenAI rate limit hit")
+        return 0
+    except Exception as e:
+        logging.error(f"OpenAI error: {e}")
         return 0
 
 
@@ -141,7 +143,6 @@ def meals_last_week(user_id: int) -> List[dict]:
         m for m in MEALS.get(user_id, [])
         if m["time"] >= week_ago
     ]
-
 
 # ========================
 # COMMANDS
@@ -224,7 +225,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{meal['description']}\n"
         f"{meal['total_calories']} ккал\n\n{comment}"
     )
-
 
 # ========================
 # MAIN
