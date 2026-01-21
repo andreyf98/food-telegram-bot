@@ -30,7 +30,7 @@ DATA_FILE = "data.json"
 logging.basicConfig(level=logging.INFO)
 
 # ========================
-# ACCESS CONTROL (NEW)
+# ACCESS CONTROL
 # ========================
 ALLOWED_USERNAMES = {
     "Laguzers",
@@ -165,9 +165,16 @@ def is_special(calories: int, text: str) -> bool:
     return False
 
 def choose_comment(calories, text):
-    return random.choice(
-        SPECIAL_COMMENTS if is_special(calories, text) else NORMAL_COMMENTS
-    )
+    # Особый комментарий — ВСЕГДА
+    if is_special(calories, text):
+        return random.choice(SPECIAL_COMMENTS)
+
+    # Обычный комментарий — ТОЛЬКО в 10% случаев
+    if random.random() < 0.10:
+        return random.choice(NORMAL_COMMENTS)
+
+    # В остальных случаях — без комментария
+    return ""
 
 def extract_calories(text):
     for line in text.splitlines():
@@ -316,7 +323,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "raw": answer
         })
 
-        await update.message.reply_text(answer + "\n\n" + comment)
+        await update.message.reply_text(
+            answer + (f"\n\n{comment}" if comment else "")
+        )
 
     except RateLimitError:
         await update.message.reply_text("⏳ Я сейчас перегружен. Попробуй позже.")
@@ -347,7 +356,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "raw": answer
         })
 
-        await update.message.reply_text(answer + "\n\n" + comment)
+        await update.message.reply_text(
+            answer + (f"\n\n{comment}" if comment else "")
+        )
         return
 
     prompt = (
@@ -369,7 +380,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "raw": answer
         })
 
-        await update.message.reply_text(answer + "\n\n" + comment)
+        await update.message.reply_text(
+            answer + (f"\n\n{comment}" if comment else "")
+        )
 
     except RateLimitError:
         await update.message.reply_text("⏳ Я сейчас перегружен. Попробуй позже.")
