@@ -30,6 +30,23 @@ DATA_FILE = "data.json"
 logging.basicConfig(level=logging.INFO)
 
 # ========================
+# ACCESS CONTROL (NEW)
+# ========================
+ALLOWED_USERNAMES = {
+    "Laguzers",
+    "fekolinakk",
+    "pupsnah",
+    "Maaksimkaa14",
+    "alisefoxz",
+    "Bhded",
+    "xo_mikhail",
+}
+
+def is_allowed(update: Update) -> bool:
+    user = update.effective_user
+    return bool(user and user.username in ALLOWED_USERNAMES)
+
+# ========================
 # COMMENTS
 # ========================
 SPECIAL_COMMENTS = [
@@ -153,17 +170,18 @@ def choose_comment(calories, text):
     )
 
 def extract_calories(text):
-    # 1️⃣ Пытаемся найти строку "Итого"
     for line in text.splitlines():
         if line.lower().startswith("итого"):
             digits = "".join(c for c in line if c.isdigit())
             if digits:
                 return int(digits)
 
-    # 2️⃣ Фолбэк: берём последнее разумное число в тексте
-    numbers = [int(n) for n in "".join(
-        c if c.isdigit() else " " for c in text
-    ).split() if 10 <= int(n) <= 5000]
+    numbers = [
+        int(n) for n in "".join(
+            c if c.isdigit() else " " for c in text
+        ).split()
+        if 10 <= int(n) <= 5000
+    ]
 
     return numbers[-1] if numbers else 0
 
@@ -187,9 +205,11 @@ async def analyze(prompt, image_base64=None):
     return response.choices[0].message.content.strip()
 
 # ========================
-# COMMANDS (НЕ ТРОГАЛ)
+# COMMANDS
 # ========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        return
     set_stopped(update.effective_user.id, False)
     await update.message.reply_text(
         "Бот активен.\n\n"
@@ -203,10 +223,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        return
     set_stopped(update.effective_user.id, True)
     await update.message.reply_text("Бот остановлен. Напиши /start, чтобы включить снова.")
 
 async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        return
     data = load_data()
     today = str(date.today())
     meals = data.get(str(update.effective_user.id), {}).get(today, [])
@@ -216,6 +240,8 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        return
     data = load_data()
     uid = str(update.effective_user.id)
     total = 0
@@ -232,18 +258,24 @@ async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        return
     if delete_last_meal(update.effective_user.id):
         await update.message.reply_text("Последний приём пищи удалён.")
     else:
         await update.message.reply_text("Удалять нечего.")
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        return
     if reset_today(update.effective_user.id):
         await update.message.reply_text("Сегодняшний день сброшен.")
     else:
         await update.message.reply_text("Сегодня пока нечего сбрасывать.")
 
 async def fix(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        return
     context.user_data["fixing"] = True
     await update.message.reply_text(
         "Опиши, что нужно исправить.\n"
@@ -251,9 +283,11 @@ async def fix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ========================
-# HANDLERS (НЕ ТРОГАЛ)
+# HANDLERS
 # ========================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        return
     if is_stopped(update.effective_user.id):
         return
 
@@ -288,6 +322,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⏳ Я сейчас перегружен. Попробуй позже.")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        return
     if is_stopped(update.effective_user.id):
         return
 
