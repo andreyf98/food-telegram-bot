@@ -66,12 +66,6 @@ NORMAL_COMMENTS = [
     "Хорошо вписывается в день.",
 ]
 
-SPECIAL_KEYWORDS = [
-    "бургер", "пицца", "фастфуд", "картофель фри",
-    "торт", "десерт", "алкоголь", "пиво",
-    "ipa", "lager", "stout", "эль"
-]
-
 # ========================
 # DATA
 # ========================
@@ -137,11 +131,21 @@ def reset_today(user_id):
 # ========================
 # LOGIC
 # ========================
-def is_special(calories, text):
+def is_special(calories: int, text: str) -> bool:
+    text = text.lower()
+
     if calories > 1000:
         return True
-    text = text.lower()
-    return any(word in text for word in SPECIAL_KEYWORDS)
+
+    alcohol_words = {"пиво", "алкоголь", "ipa", "lager", "stout", "эль"}
+    if any(w in text for w in alcohol_words):
+        return True
+
+    sweet_words = {"торт", "пирожное", "десерт", "шоколад", "конфеты"}
+    if any(w in text for w in sweet_words) and calories >= 400:
+        return True
+
+    return False
 
 def choose_comment(calories, text):
     return random.choice(
@@ -258,16 +262,20 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Итого: ккал"
     )
 
-    answer = await analyze(prompt, image)
-    calories = extract_calories(answer)
-    comment = choose_comment(calories, answer)
+    try:
+        answer = await analyze(prompt, image)
+        calories = extract_calories(answer)
+        comment = choose_comment(calories, answer)
 
-    add_meal(update.effective_user.id, {
-        "calories": calories,
-        "raw": answer
-    })
+        add_meal(update.effective_user.id, {
+            "calories": calories,
+            "raw": answer
+        })
 
-    await update.message.reply_text(answer + "\n\n" + comment)
+        await update.message.reply_text(answer + "\n\n" + comment)
+
+    except RateLimitError:
+        await update.message.reply_text("⏳ Я сейчас перегружен. Попробуй позже.")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_stopped(update.effective_user.id):
@@ -305,16 +313,20 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Итого: ккал"
     )
 
-    answer = await analyze(prompt)
-    calories = extract_calories(answer)
-    comment = choose_comment(calories, answer)
+    try:
+        answer = await analyze(prompt)
+        calories = extract_calories(answer)
+        comment = choose_comment(calories, answer)
 
-    add_meal(update.effective_user.id, {
-        "calories": calories,
-        "raw": answer
-    })
+        add_meal(update.effective_user.id, {
+            "calories": calories,
+            "raw": answer
+        })
 
-    await update.message.reply_text(answer + "\n\n" + comment)
+        await update.message.reply_text(answer + "\n\n" + comment)
+
+    except RateLimitError:
+        await update.message.reply_text("⏳ Я сейчас перегружен. Попробуй позже.")
 
 # ========================
 # MAIN
