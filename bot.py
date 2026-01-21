@@ -1,7 +1,7 @@
 import os
 import logging
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List
 
 from telegram import Update
@@ -85,14 +85,16 @@ def is_special_meal(meal: dict) -> bool:
     if any(word in text for word in ALCOHOL_KEYWORDS):
         return True
 
-    if any(word in text for word in SWEET_KEYWORDS) and calories >= 500:
+    if any(word in text for word in SWEET_KEYWORDS) and calories >= 600:
         return True
 
     return False
 
 
 def choose_comment(meal: dict) -> str:
-    return random.choice(SPECIAL_COMMENTS if is_special_meal(meal) else NORMAL_COMMENTS)
+    return random.choice(
+        SPECIAL_COMMENTS if is_special_meal(meal) else NORMAL_COMMENTS
+    )
 
 
 def ask_openai(prompt: str) -> int:
@@ -100,7 +102,10 @@ def ask_openai(prompt: str) -> int:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "Определи калорийность еды в ккал одним числом."},
+                {
+                    "role": "system",
+                    "content": "Определи калорийность еды. Ответь ТОЛЬКО числом в ккал.",
+                },
                 {"role": "user", "content": prompt},
             ],
         )
@@ -122,18 +127,33 @@ def add_meal(user_id: int, description: str):
     return meal
 
 
+def meals_today(user_id: int) -> List[dict]:
+    today = datetime.now().date()
+    return [
+        m for m in MEALS.get(user_id, [])
+        if m["time"].date() == today
+    ]
+
+
+def meals_last_week(user_id: int) -> List[dict]:
+    week_ago = datetime.now() - timedelta(days=7)
+    return [
+        m for m in MEALS.get(user_id, [])
+        if m["time"] >= week_ago
+    ]
+
+
 # ========================
 # COMMANDS
 # ========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Привет 👋\n\n"
         "Я считаю калории по фото и тексту.\n\n"
         "Команды:\n"
         "/today — калории за сегодня\n"
         "/week — калории за неделю\n"
-        "/delete — удалить последний приём пищи\n"
+        "/delete — удалить последний приём\n"
         "/fix новое описание — исправить последний приём\n"
         "/reset — сбросить день\n"
         "/stop — остановить бота"
@@ -146,8 +166,9 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    MEALS.pop(update.effective_user.id, None)
-    await update.message.reply_text("День сброшен.")
+    user_id = update.effective_user.id
+    MEALS[user_id] = []
+    await update.message.reply_text("Счётчик за день сброшен.")
 
 
 async def delete_last(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -177,19 +198,21 @@ async def fix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     comment = choose_comment(meal)
 
     await update.message.reply_text(
-        f"Исправлено:\n{meal['description']}\n"
+        f"{meal['description']}\n"
         f"{meal['total_calories']} ккал\n\n{comment}"
     )
 
 
 async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    total = sum(m["total_calories"] for m in MEALS.get(update.effective_user.id, []))
+    meals = meals_today(update.effective_user.id)
+    total = sum(m["total_calories"] for m in meals)
     await update.message.reply_text(f"Сегодня: {total} ккал")
 
 
 async def week(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    total = sum(m["total_calories"] for m in MEALS.get(update.effective_user.id, []))
-    await update.message.reply_text(f"За неделю: {total} ккал")
+    meals = meals_last_week(update.effective_user.id)
+    total = sum(m["total_calories"] for m in meals)
+    await update.message.reply_text(f"За 7 дней: {total} ккал")
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -211,4 +234,20 @@ def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler_
+    app.add_handler(CommandHandler("stop", stop))
+    app.add_handler(CommandHandler("reset", reset))
+    app.add_handler(CommandHandler("delete", delete_last))
+    app.add_handler(CommandHandler("fix", fix))
+    app.add_handler(CommandHandler("today", today))
+    app.add_handler(CommandHandler("week", week))
+
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
+    )
+
+    print("Bot started")
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
